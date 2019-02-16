@@ -8,18 +8,20 @@
 
 class Application {
 private:
-	unsigned width = 1400;
-	unsigned height = 1400;
+	int width = 500;
+	int height = 500;
+
+	sf::Vector2i nativeResolution;
 
 	unsigned maxIterations = 100;
 
-	unsigned maxThreads = std::thread::hardware_concurrency();
+	const unsigned maxThreads = std::thread::hardware_concurrency();
 
 	sf::RenderWindow window;
 
-	std::complex<double> translation;
+	std::complex<double> translation = { 0.75, 0 };
 
-	double Zoom;
+	double Zoom = 2.1;
 
 	struct color {
 		float R, G, B;
@@ -86,7 +88,7 @@ private:
 	}
 
 	std::complex<double> mapComplex(float x, float y) {
-		return 2 * Zoom * std::complex<double>(x / width - 0.5, 0.5 - y / height) - translation;
+		return 2 * Zoom * std::complex<double>((2.0 * x - width) / height / 2, 0.5 - y / height) - translation;
 	}
 
 	color generatePixelColor(unsigned x, unsigned y) {
@@ -148,19 +150,49 @@ private:
 		generateImage(width - std::abs(t.x), std::abs(t.y), t.x > 0 ? t.x : 0, t.y > 0 ? height - t.y : 0);
 	}
 
+	void setSize(unsigned w, unsigned h, sf::Vector2i position, bool fullscreen = false) {
+		width = w;
+		height = h;
+		window.create({ w, h }, "Complex Sets Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default);
+
+		window.setPosition(position);
+
+		pixels.resize(width * height);
+		texture.create(width, height);
+		sprite.setTextureRect(sf::IntRect(0, 0, w, h));
+
+		generateImage(width, height);
+	}
+
+	bool fullscreen = false;
+	sf::Vector2i lastPosition;
+	sf::Vector2i lastSize;
+
+	void toggleFullscreen() {
+		fullscreen = !fullscreen;
+		if (fullscreen) {
+			lastPosition = window.getPosition();
+			lastSize = { width, height };
+			setSize(nativeResolution.x, nativeResolution.y, { 0, 0 }, true);
+		}
+		else
+			setSize(lastSize.x, lastSize.y, lastPosition);
+		
+	}
+
 public:
 	Application(): defaultColorMap({
 		{ {0, 0, 0}, 0 },
 		//{ {1, 0.75, 0}, 0.25 },
 		//{ {1, 1, 1}, 0.5 },
 		//{ {0, 0, 1}, 0.75 },
-		{ {1, 1, 1}, 1 }}), pixels(width * height) {
-		texture.create(width, height);
+		{ {1, 1, 1}, 1 }}) {
 		sprite.setTexture(texture);
 
-		reset();
+		nativeResolution = { static_cast<int>(sf::VideoMode::getDesktopMode().width), static_cast<int>(sf::VideoMode::getDesktopMode().height) };
 
-		window.create(sf::VideoMode(width, height), "Complex Sets");
+		setSize(width, height, { (nativeResolution.x - width) / 2, (nativeResolution.y - height) / 2 });
+
 		window.setVerticalSyncEnabled(true);
 	}
 
@@ -186,9 +218,12 @@ public:
 				case sf::Event::MouseWheelScrolled:
 					zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition);
 					break;
+				case sf::Event::Resized:
+					setSize(event.size.width, event.size.height, window.getPosition()); break;
 				case sf::Event::KeyReleased:
 					switch (event.key.code) {
 					case sf::Keyboard::R: reset(); break;
+					case sf::Keyboard::F11: toggleFullscreen(); break;
 					case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
 					case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
 					}
@@ -202,6 +237,5 @@ public:
 
 		return 0;
 	}
-	~Application() = default;
 };
 
