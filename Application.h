@@ -127,7 +127,6 @@ private:
 				t.join();
 		
 		texture.update(reinterpret_cast<unsigned char*>(pixels.data()));
-		window.draw(sprite);
 	}
 
 	void zoom(double z, sf::Vector2i mouse) {
@@ -135,6 +134,7 @@ private:
 		Zoom /= z;
 		translation += screen2complex(mouse.x, mouse.y) - a;
 		generateImage(width, height);
+		drawFunctionIterations(true);
 	}
 
 	void reset() {
@@ -193,25 +193,18 @@ private:
 		case sf::Event::MouseButtonPressed:
 			if (event.mouseButton.button == sf::Mouse::Left)
 				leftPressed = true;
-			else if (event.mouseButton.button == sf::Mouse::Right) {
+			else if (event.mouseButton.button == sf::Mouse::Right)
 				rightPressed = true;
-				drawFunctionIterations();
-			}
 			break;
 		case sf::Event::MouseButtonReleased:
 			if (event.mouseButton.button == sf::Mouse::Left)
 				leftPressed = false;
-			else if (event.mouseButton.button == sf::Mouse::Right) {
+			else if (event.mouseButton.button == sf::Mouse::Right)
 				rightPressed = false;
-				window.clear();
-				window.draw(sprite);
-			}
 			break;
 		case sf::Event::MouseMoved:
 			if (leftPressed)
 				translate({ event.mouseMove.x - lastMousePosition.x, lastMousePosition.y - event.mouseMove.y });
-			else if (rightPressed)
-				drawFunctionIterations();
 			lastMousePosition = { event.mouseMove.x, event.mouseMove.y };
 			break;
 		case sf::Event::MouseWheelScrolled:
@@ -221,6 +214,7 @@ private:
 		case sf::Event::KeyReleased:
 			switch (event.key.code) {
 			case sf::Keyboard::R: reset(); break;
+			case sf::Keyboard::Enter: if (!event.key.alt) break;
 			case sf::Keyboard::F11: toggleFullscreen(); break;
 			case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
 			case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
@@ -232,11 +226,8 @@ private:
 	sf::Vector2i lastGeneratedPosition;
 	std::vector<sf::Vertex> points;
 
-	void drawFunctionIterations() {
-		window.clear();
-		window.draw(sprite);
-
-		if (lastGeneratedPosition != lastMousePosition) {
+	void drawFunctionIterations(bool regenerate = false) {
+		if (lastGeneratedPosition != lastMousePosition || regenerate) {
 			points.clear();
 			points.push_back({ { static_cast<float>(lastMousePosition.x), static_cast<float>(lastMousePosition.y) } });
 
@@ -246,15 +237,14 @@ private:
 				z = z * z + c;
 				sf::Vector2<double> s = complex2screen(z);
 				points.push_back({ { static_cast<float>(s.x), static_cast<float>(s.y) } });
-				points.push_back(points.back());
-				if (s.x > width || s.y > height)
+				if (std::abs(s.x) > 5 * width || std::abs(s.y) > 5 * height)
 					break;
 			}
 
 			lastGeneratedPosition = lastMousePosition;
 		}
 		
-		window.draw(points.data(), points.size(), sf::Lines);
+		window.draw(points.data(), points.size(), sf::LineStrip);
 	}
 
 public:
@@ -277,10 +267,20 @@ public:
 	void run() {
 		while (window.isOpen()) {
 			sf::Event event;
+			
 			while (window.pollEvent(event))
 				handleEvent(event);
 
+			window.draw(sprite);
+
+			if (rightPressed)
+				drawFunctionIterations();
+
 			window.display();
+
+
+			if (rightPressed)
+				window.clear();
 		}
 	}
 };
