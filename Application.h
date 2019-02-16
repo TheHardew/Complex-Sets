@@ -8,8 +8,8 @@
 
 class Application {
 private:
-	int width = 500;
-	int height = 500;
+	int width = 1200;
+	int height = 800;
 
 	sf::Vector2i nativeResolution;
 
@@ -48,6 +48,7 @@ private:
 	sf::Sprite sprite;
 	
 	bool leftPressed;
+	bool rightPressed = false;
 	sf::Vector2i lastMousePosition;
 	
 	class colorMap {
@@ -87,12 +88,17 @@ private:
 		return 0;
 	}
 
-	std::complex<double> mapComplex(float x, float y) {
+	std::complex<double> screen2complex(float x, float y) {
 		return 2 * Zoom * std::complex<double>((2.0 * x - width) / height / 2, 0.5 - y / height) - translation;
 	}
 
+	sf::Vector2<double> complex2screen(std::complex<double> c) {
+		c = (c + translation) / 2.0 / Zoom;
+		return { (c.real() * 2 * height + width) / 2, -(c.imag() - 0.5) * height };
+	}
+
 	color generatePixelColor(unsigned x, unsigned y) {
-		return defaultColorMap.getColor(getValue(mapComplex(x, y)));
+		return defaultColorMap.getColor(getValue(screen2complex(x, y)));
 	}
 
 	void threadFunction(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
@@ -121,23 +127,24 @@ private:
 				t.join();
 		
 		texture.update(reinterpret_cast<unsigned char*>(pixels.data()));
+		window.draw(sprite);
 	}
 
 	void zoom(double z, sf::Vector2i mouse) {
-		auto a = mapComplex(mouse.x, mouse.y);
+		auto a = screen2complex(mouse.x, mouse.y);
 		Zoom /= z;
-		translation += mapComplex(mouse.x, mouse.y) - a;
+		translation += screen2complex(mouse.x, mouse.y) - a;
 		generateImage(width, height);
 	}
 
 	void reset() {
 		Zoom = 2.1;
-		translation = { 0, 0 };
+		translation = { 0.75, 0 };
 		generateImage(width, height);
 	}
 
 	void translate(sf::Vector2i t) {
-		translation += mapComplex(t.x, -t.y) - mapComplex(0, 0);
+		translation += screen2complex(t.x, -t.y) - screen2complex(0, 0);
 
 		if (t.y > 0)
 			for (unsigned row = t.y; row < height; ++row)
@@ -153,7 +160,7 @@ private:
 	void setSize(unsigned w, unsigned h, sf::Vector2i position, bool fullscreen = false) {
 		width = w;
 		height = h;
-		window.create({ w, h }, "Complex Sets Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default);
+		window.create({ w, h }, "Complex Sets Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default, sf::ContextSettings(0, 0, 16));
 
 		window.setPosition(position);
 
@@ -180,6 +187,76 @@ private:
 		
 	}
 
+	void handleEvent(sf::Event event) {
+		switch (event.type) {
+		case sf::Event::Closed: window.close(); break;
+		case sf::Event::MouseButtonPressed:
+			if (event.mouseButton.button == sf::Mouse::Left)
+				leftPressed = true;
+			else if (event.mouseButton.button == sf::Mouse::Right) {
+				rightPressed = true;
+				drawFunctionIterations();
+			}
+			break;
+		case sf::Event::MouseButtonReleased:
+			if (event.mouseButton.button == sf::Mouse::Left)
+				leftPressed = false;
+			else if (event.mouseButton.button == sf::Mouse::Right) {
+				rightPressed = false;
+				window.clear();
+				window.draw(sprite);
+			}
+			break;
+		case sf::Event::MouseMoved:
+			if (leftPressed)
+				translate({ event.mouseMove.x - lastMousePosition.x, lastMousePosition.y - event.mouseMove.y });
+			else if (rightPressed)
+				drawFunctionIterations();
+			lastMousePosition = { event.mouseMove.x, event.mouseMove.y };
+			break;
+		case sf::Event::MouseWheelScrolled:
+			zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition); break;
+		case sf::Event::Resized:
+			setSize(event.size.width, event.size.height, window.getPosition()); break;
+		case sf::Event::KeyReleased:
+			switch (event.key.code) {
+			case sf::Keyboard::R: reset(); break;
+			case sf::Keyboard::F11: toggleFullscreen(); break;
+			case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
+			case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
+			}
+			break;
+		}
+	}
+
+	sf::Vector2i lastGeneratedPosition;
+	std::vector<sf::Vertex> points;
+
+	void drawFunctionIterations() {
+		window.clear();
+		window.draw(sprite);
+
+		if (lastGeneratedPosition != lastMousePosition) {
+			points.clear();
+			points.push_back({ { static_cast<float>(lastMousePosition.x), static_cast<float>(lastMousePosition.y) } });
+
+			auto c = screen2complex(lastMousePosition.x, lastMousePosition.y);
+			std::complex<double> z = 0;
+			for (unsigned i = 0; i < maxIterations; ++i) {
+				z = z * z + c;
+				sf::Vector2<double> s = complex2screen(z);
+				points.push_back({ { static_cast<float>(s.x), static_cast<float>(s.y) } });
+				points.push_back(points.back());
+				if (s.x > width || s.y > height)
+					break;
+			}
+
+			lastGeneratedPosition = lastMousePosition;
+		}
+		
+		window.draw(points.data(), points.size(), sf::Lines);
+	}
+
 public:
 	Application(): defaultColorMap({
 		{ {0, 0, 0}, 0 },
@@ -193,49 +270,18 @@ public:
 
 		setSize(width, height, { (nativeResolution.x - width) / 2, (nativeResolution.y - height) / 2 });
 
-		window.setVerticalSyncEnabled(true);
+		//window.setVerticalSyncEnabled(true);
+		window.setFramerateLimit(60);
 	}
 
-	bool run() {
+	void run() {
 		while (window.isOpen()) {
 			sf::Event event;
-			while (window.pollEvent(event)) {
-				switch (event.type) {
-				case sf::Event::Closed: window.close(); break;
-				case sf::Event::MouseButtonPressed:
-					if (event.mouseButton.button == sf::Mouse::Left)
-						leftPressed = true;
-					break;
-				case sf::Event::MouseButtonReleased:
-					if (event.mouseButton.button == sf::Mouse::Left)
-						leftPressed = false;
-					break;
-				case sf::Event::MouseMoved:
-					if (leftPressed)
-						translate({ event.mouseMove.x - lastMousePosition.x, lastMousePosition.y - event.mouseMove.y});
-					lastMousePosition = { event.mouseMove.x, event.mouseMove.y };
-					break;
-				case sf::Event::MouseWheelScrolled:
-					zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition);
-					break;
-				case sf::Event::Resized:
-					setSize(event.size.width, event.size.height, window.getPosition()); break;
-				case sf::Event::KeyReleased:
-					switch (event.key.code) {
-					case sf::Keyboard::R: reset(); break;
-					case sf::Keyboard::F11: toggleFullscreen(); break;
-					case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
-					case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
-					}
-					break;
-				}
-			}
+			while (window.pollEvent(event))
+				handleEvent(event);
 
-			window.draw(sprite);
 			window.display();
 		}
-
-		return 0;
 	}
 };
 
