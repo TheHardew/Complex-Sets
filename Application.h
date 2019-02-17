@@ -1,55 +1,74 @@
 #pragma once
 #include <SFML/Graphics.hpp>
 #include <algorithm>
+#include <compare>
 #include <complex>
 #include <iostream>
 #include <thread>
 #include <vector>
 
+struct color {
+	float R, G, B;
+
+	color operator*(float c) { return { std::min(c * R, 1.f), std::min(c * G, 1.f) , std::min(c * B, 1.f) }; }
+	color operator+(color snd) { return { std::min(R + snd.R, 1.f), std::min(G + snd.G, 1.f), std::min(B + snd.B, 1.f) }; }
+};
+
+struct pixel {
+	unsigned char R, G, B, A;
+
+	pixel() = default;
+	pixel(color c) : R(255 * c.R), G(255 * c.G), B(255 * c.B), A(255) {}
+};
+
+template <typename T>
+struct vector {
+	T x, y;
+
+	vector() = default;
+	vector(T X, T Y) : x(X), y(Y) {}
+	vector(sf::Vector2<T> v): x(v.x), y(v.y) {}
+
+	constexpr bool operator==(vector v) { return (x == v.x) && (y == v.y); }
+	constexpr bool operator!=(vector v) { return !operator==(v); }
+
+	vector operator-() { return { -x, -y }; }
+	vector operator+(vector v) { return { x + v.x, y + v.y }; }
+	vector operator-(vector v) { return operator+(-v); }
+	vector operator*(T d) { return { d * x, d * y }; }
+	vector operator/(T d) { return { x / d, y / d }; }
+
+	template <typename V>
+	operator sf::Vector2<V>() { return { static_cast<V>(x), static_cast<V>(y) }; }
+};
+
+using mousePosition = vector<int>;
+using resolution = vector<int>;
+
 class Application {
 private:
 	int width = 1200;
 	int height = 800;
-
-	sf::Vector2i nativeResolution;
+	resolution nativeResolution;
 
 	unsigned maxIterations = 100;
-
 	const unsigned maxThreads = std::thread::hardware_concurrency();
 
 	sf::RenderWindow window;
 
-	std::complex<double> translation = { 0.75, 0 };
+	using numberT = double;
+	using complex = std::complex<numberT>;
+	complex translation = { 0.75, 0 };
+	numberT Zoom = 2.1;
 
-	double Zoom = 2.1;
-
-	struct color {
-		float R, G, B;
-
-		color operator*(float c) {
-			return { std::min(c * R, 1.f), std::min(c * G, 1.f) , std::min(c * B, 1.f) };
-		}
-
-		color operator+(color snd) {
-			return { std::min(R + snd.R, 1.f), std::min(G + snd.G, 1.f), std::min(B + snd.B, 1.f) };
-		}
-	};
-
-	struct pixel {
-		unsigned char R, G, B, A;
-
-		pixel() = default;
-		pixel(color c) : R(255 * c.R), G(255 * c.G), B(255 * c.B), A(255) {}
-	};
-
-	std::vector<pixel> pixels;
+	std::vector<pixel> image;
 
 	sf::Texture texture;
 	sf::Sprite sprite;
 	
 	bool leftPressed;
 	bool rightPressed = false;
-	sf::Vector2i lastMousePosition;
+	mousePosition lastMousePosition;
 	
 	class colorMap {
 	private:
@@ -76,8 +95,8 @@ private:
 
 	colorMap defaultColorMap;
 
-	float getValue(std::complex<double> c) {
-		std::complex<double> z = 0;
+	float getValue(const complex c) {
+		complex z = 0;
 
 		for (unsigned i = 0; i < maxIterations; ++i) {
 			z = z * z + c;
@@ -88,48 +107,49 @@ private:
 		return 0;
 	}
 
-	std::complex<double> screen2complex(float x, float y) {
-		return 2 * Zoom * std::complex<double>((2.0 * x - width) / height / 2, 0.5 - y / height) - translation;
+	complex screen2complex(double x, double y) {
+		return 2 * Zoom* complex((2.0 * x - width) / height / 2, 0.5 - y / height) - translation;
 	}
 
-	sf::Vector2<double> complex2screen(std::complex<double> c) {
+	complex screen2complex(vector<double> c) {
+		return screen2complex(c.x, c.y);
+	}
+
+	vector<double> complex2screen(complex c) {
 		c = (c + translation) / 2.0 / Zoom;
 		return { (c.real() * 2 * height + width) / 2, -(c.imag() - 0.5) * height };
 	}
 
-	color generatePixelColor(unsigned x, unsigned y) {
-		return defaultColorMap.getColor(getValue(screen2complex(x, y)));
+	color generatePixelColor(vector<double> p) {
+		return defaultColorMap.getColor(getValue(screen2complex(p)));
 	}
 
-	void threadFunction(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
+	color generatePixelColor(double x, double y) {
+		return generatePixelColor({ x, y });
+	}
+
+	void generatePixels(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
 		for (unsigned iy = y; iy < h + y; ++iy)
 			for (unsigned ix = x; ix < w + x; ++ix)
-				pixels[ix + iy * width] = generatePixelColor(ix, iy);
+				image[ix + iy * width] = generatePixelColor(ix, iy);
 	}
 
 	void generateImage(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
 		std::vector<std::thread> threads;
 		threads.reserve(maxThreads);
 
-		if (w < h) {
-			for (unsigned i = 0; i < maxThreads - 1; ++i)
-				threads.push_back(std::thread([this](unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) { threadFunction(w, h, x, y); }, w, h / maxThreads, x, y + h / maxThreads * i));
-			threads.push_back(std::thread([this](unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) { threadFunction(w, h, x, y); }, w, h - h / maxThreads * (maxThreads - 1), x, y + h / maxThreads * (maxThreads - 1)));
-		}
-		else {
-			for (unsigned i = 0; i < maxThreads - 1; ++i)
-				threads.push_back(std::thread([this](unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) { threadFunction(w, h, x, y); }, w / maxThreads, h, x + w / maxThreads * i, y));
-			threads.push_back(std::thread([this](unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) { threadFunction(w, h, x, y); }, w - w / maxThreads * (maxThreads - 1), h, x + w / maxThreads * (maxThreads - 1), y));
-		}
+		for (unsigned i = 0; i < maxThreads - 1; ++i)
+			threads.push_back(std::thread(&Application::generatePixels, this, w / maxThreads, h, x + w / maxThreads * i, y));
+		threads.push_back(std::thread(&Application::generatePixels, this, w - w / maxThreads * (maxThreads - 1), h, x + w / maxThreads * (maxThreads - 1), y));
 
 		for (auto& t : threads)
 			if (t.joinable())
 				t.join();
 		
-		texture.update(reinterpret_cast<unsigned char*>(pixels.data()));
+		texture.update(reinterpret_cast<unsigned char*>(image.data()));
 	}
 
-	void zoom(double z, sf::Vector2i mouse) {
+	void zoom(numberT z, mousePosition mouse) {
 		auto a = screen2complex(mouse.x, mouse.y);
 		Zoom /= z;
 		translation += screen2complex(mouse.x, mouse.y) - a;
@@ -143,28 +163,28 @@ private:
 		generateImage(width, height);
 	}
 
-	void translate(sf::Vector2i t) {
-		translation += screen2complex(t.x, -t.y) - screen2complex(0, 0);
+	void translate(mousePosition t) {
+		translation += screen2complex(t.x, - t.y) - screen2complex(0, 0);
 
 		if (t.y > 0)
 			for (unsigned row = t.y; row < height; ++row)
-				std::memcpy(pixels.data() + (row - t.y) * width + std::max(0, t.x), pixels.data() + row * width - std::min(0, t.x), sizeof(pixel) * (width - std::abs(t.x)));
+				std::memcpy(image.data() + (row - t.y) * width + std::max(0, t.x), image.data() + row * width - std::min(0, t.x), sizeof(pixel) * (width - std::abs(t.x)));
 		else
 			for (int row = height + t.y - 1; row >= 0; --row)
-				std::memcpy(pixels.data() + (row - t.y) * width + std::max(0, t.x), pixels.data() + row * width - std::min(0, t.x), sizeof(pixel) * (width - std::abs(t.x)));
+				std::memcpy(image.data() + (row - t.y) * width + std::max(0, t.x), image.data() + row * width - std::min(0, t.x), sizeof(pixel) * (width - std::abs(t.x)));
 
 		generateImage(std::abs(t.x), height, t.x > 0 ? 0 : width + t.x);
 		generateImage(width - std::abs(t.x), std::abs(t.y), t.x > 0 ? t.x : 0, t.y > 0 ? height - t.y : 0);
 	}
 
-	void setSize(unsigned w, unsigned h, sf::Vector2i position, bool fullscreen = false) {
+	void setSize(unsigned w, unsigned h, resolution position, bool fullscreen = false) {
 		width = w;
-		height = h;
-		window.create({ w, h }, "Complex Sets Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default, sf::ContextSettings(0, 0, 16));
+			height = h;
+		window.create({ w, h }, "Complex Set Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default, sf::ContextSettings(0, 0, 16));
 
 		window.setPosition(position);
 
-		pixels.resize(width * height);
+		image.resize(width * height);
 		texture.create(width, height);
 		sprite.setTextureRect(sf::IntRect(0, 0, w, h));
 
@@ -172,8 +192,8 @@ private:
 	}
 
 	bool fullscreen = false;
-	sf::Vector2i lastPosition;
-	sf::Vector2i lastSize;
+	resolution lastPosition;
+	resolution lastSize;
 
 	void toggleFullscreen() {
 		fullscreen = !fullscreen;
@@ -184,59 +204,54 @@ private:
 		}
 		else
 			setSize(lastSize.x, lastSize.y, lastPosition);
-		
 	}
 
 	void handleEvent(sf::Event event) {
 		switch (event.type) {
 		case sf::Event::Closed: window.close(); break;
+		case sf::Event::MouseWheelScrolled: zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition); break;
+		case sf::Event::Resized: setSize(event.size.width, event.size.height, window.getPosition()); break;
 		case sf::Event::MouseButtonPressed:
-			if (event.mouseButton.button == sf::Mouse::Left)
-				leftPressed = true;
-			else if (event.mouseButton.button == sf::Mouse::Right)
-				rightPressed = true;
+			if (event.mouseButton.button == sf::Mouse::Left) leftPressed = true;
+			if (event.mouseButton.button == sf::Mouse::Right) rightPressed = true;
 			break;
 		case sf::Event::MouseButtonReleased:
-			if (event.mouseButton.button == sf::Mouse::Left)
-				leftPressed = false;
-			else if (event.mouseButton.button == sf::Mouse::Right)
-				rightPressed = false;
+			if (event.mouseButton.button == sf::Mouse::Left) leftPressed = false;
+			if (event.mouseButton.button == sf::Mouse::Right) rightPressed = false;
 			break;
 		case sf::Event::MouseMoved:
 			if (leftPressed)
 				translate({ event.mouseMove.x - lastMousePosition.x, lastMousePosition.y - event.mouseMove.y });
 			lastMousePosition = { event.mouseMove.x, event.mouseMove.y };
 			break;
-		case sf::Event::MouseWheelScrolled:
-			zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition); break;
-		case sf::Event::Resized:
-			setSize(event.size.width, event.size.height, window.getPosition()); break;
 		case sf::Event::KeyReleased:
 			switch (event.key.code) {
 			case sf::Keyboard::R: reset(); break;
 			case sf::Keyboard::Enter: if (!event.key.alt) break;
 			case sf::Keyboard::F11: toggleFullscreen(); break;
-			case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
-			case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); break;
+			case sf::Keyboard::Add: maxIterations *= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); drawFunctionIterations(true); break;
+			case sf::Keyboard::Subtract: maxIterations /= 10; std::cout << "Max Iterations = " << maxIterations << "\n"; generateImage(width, height); drawFunctionIterations(true);  break;
 			}
 			break;
 		}
 	}
 
-	sf::Vector2i lastGeneratedPosition;
+	mousePosition lastGeneratedPosition = { -1, -1 };
 	std::vector<sf::Vertex> points;
 
 	void drawFunctionIterations(bool regenerate = false) {
+		auto color = sf::Color::White;
+		
 		if (lastGeneratedPosition != lastMousePosition || regenerate) {
 			points.clear();
-			points.push_back({ { static_cast<float>(lastMousePosition.x), static_cast<float>(lastMousePosition.y) } });
+			points.push_back({ lastMousePosition, color });
 
 			auto c = screen2complex(lastMousePosition.x, lastMousePosition.y);
-			std::complex<double> z = 0;
+			complex z = 0;
 			for (unsigned i = 0; i < maxIterations; ++i) {
 				z = z * z + c;
-				sf::Vector2<double> s = complex2screen(z);
-				points.push_back({ { static_cast<float>(s.x), static_cast<float>(s.y) } });
+				auto s = complex2screen(z);
+				points.push_back({ s, color });
 				if (std::abs(s.x) > 5 * width || std::abs(s.y) > 5 * height)
 					break;
 			}
@@ -257,30 +272,24 @@ public:
 		sprite.setTexture(texture);
 
 		nativeResolution = { static_cast<int>(sf::VideoMode::getDesktopMode().width), static_cast<int>(sf::VideoMode::getDesktopMode().height) };
+		setSize(width, height, (nativeResolution - resolution(width, height)) / 2);
 
-		setSize(width, height, { (nativeResolution.x - width) / 2, (nativeResolution.y - height) / 2 });
-
-		//window.setVerticalSyncEnabled(true);
-		window.setFramerateLimit(60);
+		window.setVerticalSyncEnabled(true);
 	}
 
 	void run() {
 		while (window.isOpen()) {
 			sf::Event event;
-			
 			while (window.pollEvent(event))
 				handleEvent(event);
 
+			window.clear();
 			window.draw(sprite);
 
 			if (rightPressed)
 				drawFunctionIterations();
 
 			window.display();
-
-
-			if (rightPressed)
-				window.clear();
 		}
 	}
 };
