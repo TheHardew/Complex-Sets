@@ -1,45 +1,45 @@
 #pragma once
 #include <SFML/Graphics.hpp>
 #include <algorithm>
-#include <compare>
 #include <complex>
 #include <iostream>
+#include <limits>
 #include <thread>
 #include <vector>
 
 struct color {
 	float R, G, B;
 
-	color operator*(float c) { return { std::min(c * R, 1.f), std::min(c * G, 1.f) , std::min(c * B, 1.f) }; }
-	color operator+(color snd) { return { std::min(R + snd.R, 1.f), std::min(G + snd.G, 1.f), std::min(B + snd.B, 1.f) }; }
+	constexpr color operator*(float c) { return { std::min(c * R, 1.f), std::min(c * G, 1.f) , std::min(c * B, 1.f) }; }
+	constexpr color operator+(color snd) { return { std::min(R + snd.R, 1.f), std::min(G + snd.G, 1.f), std::min(B + snd.B, 1.f) }; }
 };
 
 struct pixel {
 	unsigned char R, G, B, A;
 
-	pixel() = default;
-	pixel(color c) : R(255 * c.R), G(255 * c.G), B(255 * c.B), A(255) {}
+	constexpr pixel() : R(0), G(0), B(0), A(0) {}
+	constexpr pixel(color c) : R(255 * c.R), G(255 * c.G), B(255 * c.B), A(255) {}
 };
 
 template <typename T>
 struct vector {
 	T x, y;
 
-	vector() = default;
-	vector(T X, T Y) : x(X), y(Y) {}
-	vector(sf::Vector2<T> v): x(v.x), y(v.y) {}
+	constexpr vector() = default;
+	constexpr vector(T X, T Y) : x(X), y(Y) {}
+	constexpr vector(sf::Vector2<T> v) : x(v.x), y(v.y) {}
 
 	constexpr bool operator==(vector v) { return (x == v.x) && (y == v.y); }
 	constexpr bool operator!=(vector v) { return !operator==(v); }
 
-	vector operator-() { return { -x, -y }; }
-	vector operator+(vector v) { return { x + v.x, y + v.y }; }
-	vector operator-(vector v) { return operator+(-v); }
-	vector operator*(T d) { return { d * x, d * y }; }
-	vector operator/(T d) { return { x / d, y / d }; }
+	constexpr vector operator-() { return { -x, -y }; }
+	constexpr vector operator+(vector v) { return { x + v.x, y + v.y }; }
+	constexpr vector operator-(vector v) { return operator+(-v); }
+	constexpr vector operator*(T d) { return { d * x, d * y }; }
+	constexpr vector operator/(T d) { return { x / d, y / d }; }
 
 	template <typename V>
-	operator sf::Vector2<V>() { return { static_cast<V>(x), static_cast<V>(y) }; }
+	constexpr operator sf::Vector2<V>() { return { static_cast<V>(x), static_cast<V>(y) }; }
 };
 
 using mousePosition = vector<int>;
@@ -79,6 +79,9 @@ private:
 		}
 
 		color getColor(float Value) {
+			if (Value == 0)
+				return { 0, 0, 0 };
+
 			if (Value <= steps.front().second)
 				return steps.front().first;
 
@@ -95,13 +98,15 @@ private:
 
 	colorMap defaultColorMap;
 
+	const double escapeRadius = 100;
+
 	float getValue(const complex c) {
 		complex z = 0;
 
 		for (unsigned i = 0; i < maxIterations; ++i) {
 			z = z * z + c;
-			if (std::norm(z) >= 4)
-				return static_cast<float>(i) / maxIterations;
+			if (std::norm(z) >= escapeRadius * escapeRadius)
+				return (i - std::log2(std::log(std::norm(z)) / std::log(escapeRadius))) / maxIterations;
 		}
 
 		return 0;
@@ -145,7 +150,7 @@ private:
 		for (auto& t : threads)
 			if (t.joinable())
 				t.join();
-		
+
 		texture.update(reinterpret_cast<unsigned char*>(image.data()));
 	}
 
@@ -179,7 +184,7 @@ private:
 
 	void setSize(unsigned w, unsigned h, resolution position, bool fullscreen = false) {
 		width = w;
-			height = h;
+		height = h;
 		window.create({ w, h }, "Complex Set Viewer", fullscreen ? sf::Style::Fullscreen : sf::Style::Default, sf::ContextSettings(0, 0, 16));
 
 		window.setPosition(position);
@@ -237,21 +242,21 @@ private:
 	}
 
 	mousePosition lastGeneratedPosition = { -1, -1 };
-	std::vector<sf::Vertex> points;
+	std::vector<sf::Vertex> vertices;
 
 	void drawFunctionIterations(bool regenerate = false) {
-		auto color = sf::Color::White;
+		const auto color = sf::Color::White;
 		
 		if (lastGeneratedPosition != lastMousePosition || regenerate) {
-			points.clear();
-			points.push_back({ lastMousePosition, color });
+			vertices.clear();
+			vertices.push_back({ lastMousePosition, color });
 
 			auto c = screen2complex(lastMousePosition.x, lastMousePosition.y);
 			complex z = 0;
 			for (unsigned i = 0; i < maxIterations; ++i) {
 				z = z * z + c;
 				auto s = complex2screen(z);
-				points.push_back({ s, color });
+				vertices.push_back({ s, color });
 				if (std::abs(s.x) > 5 * width || std::abs(s.y) > 5 * height)
 					break;
 			}
@@ -259,16 +264,16 @@ private:
 			lastGeneratedPosition = lastMousePosition;
 		}
 		
-		window.draw(points.data(), points.size(), sf::LineStrip);
+		window.draw(vertices.data(), vertices.size(), sf::LineStrip);
 	}
 
 public:
 	Application(): defaultColorMap({
-		{ {0, 0, 0}, 0 },
-		//{ {1, 0.75, 0}, 0.25 },
-		//{ {1, 1, 1}, 0.5 },
-		//{ {0, 0, 1}, 0.75 },
-		{ {1, 1, 1}, 1 }}) {
+		{ {0, 7.0 / 255, 100.0 / 255}, 0 },
+		{ {32.0 / 255, 107.0 / 255, 203.0 / 255 }, 0.16 },
+		{ {237.0 / 255, 255.0 / 255, 255.0 / 255 }, 0.42 },
+		{ {255.0 / 255, 170.0 / 255, 0 }, 0.6425 },
+		{ {0, 2.0 / 255, 0 }, 0.8575 }, }) {
 		sprite.setTexture(texture);
 
 		nativeResolution = { static_cast<int>(sf::VideoMode::getDesktopMode().width), static_cast<int>(sf::VideoMode::getDesktopMode().height) };
