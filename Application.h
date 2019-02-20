@@ -1,9 +1,9 @@
 #pragma once
 #include <SFML/Graphics.hpp>
 #include <algorithm>
+#include <chrono>
 #include <complex>
 #include <iostream>
-#include <limits>
 #include <thread>
 #include <vector>
 
@@ -34,9 +34,17 @@ struct vector {
 
 	constexpr vector operator-() { return { -x, -y }; }
 	constexpr vector operator+(vector v) { return { x + v.x, y + v.y }; }
+	constexpr vector& operator+=(vector v) { operator+(v); return *this; }
 	constexpr vector operator-(vector v) { return operator+(-v); }
-	constexpr vector operator*(T d) { return { d * x, d * y }; }
-	constexpr vector operator/(T d) { return { x / d, y / d }; }
+	constexpr vector& operator-=(vector v) { operator-(v); return *this; }
+	template <typename D>
+	constexpr vector operator*(D d) { return { static_cast<T>(d * x), static_cast<T>(d * y) }; }
+	template <typename D>
+	constexpr vector& operator*=(D d) { return *this = operator*(d); }
+	template <typename D>
+	constexpr vector operator/(D d) { return { static_cast<T>(x / d), static_cast<T>(y / d) }; }
+	template <typename D>
+	constexpr vector& operator/=(D d) { return *this = operator/(d); }
 
 	template <typename V>
 	constexpr operator sf::Vector2<V>() { return { static_cast<V>(x), static_cast<V>(y) }; }
@@ -49,7 +57,6 @@ class Application {
 private:
 	int width = 1200;
 	int height = 800;
-	resolution nativeResolution;
 
 	unsigned maxIterations = 100;
 	const unsigned maxThreads = std::thread::hardware_concurrency();
@@ -65,10 +72,6 @@ private:
 
 	sf::Texture texture;
 	sf::Sprite sprite;
-	
-	bool leftPressed;
-	bool rightPressed = false;
-	mousePosition lastMousePosition;
 	
 	class colorMap {
 	private:
@@ -98,7 +101,7 @@ private:
 
 	colorMap defaultColorMap;
 
-	const double escapeRadius = 100;
+	const double escapeRadius = 1e2;
 
 	float getValue(const complex c) {
 		complex z = 0;
@@ -106,7 +109,7 @@ private:
 		for (unsigned i = 0; i < maxIterations; ++i) {
 			z = z * z + c;
 			if (std::norm(z) >= escapeRadius * escapeRadius)
-				return (i - std::log2(std::log(std::norm(z)) / std::log(escapeRadius))) / maxIterations;
+				return (i - std::log2(std::log(std::norm(z)) / 2 / std::log(escapeRadius))) / maxIterations;
 		}
 
 		return 0;
@@ -116,7 +119,8 @@ private:
 		return 2 * Zoom* complex((2.0 * x - width) / height / 2, 0.5 - y / height) - translation;
 	}
 
-	complex screen2complex(vector<double> c) {
+	template <typename T>
+	complex screen2complex(vector<T> c) {
 		return screen2complex(c.x, c.y);
 	}
 
@@ -126,11 +130,11 @@ private:
 	}
 
 	color generatePixelColor(vector<double> p) {
-		return defaultColorMap.getColor(getValue(screen2complex(p)));
+		return generatePixelColor(p.x, p.y);
 	}
 
 	color generatePixelColor(double x, double y) {
-		return generatePixelColor({ x, y });
+		return defaultColorMap.getColor(getValue(screen2complex(x, y)));
 	}
 
 	void generatePixels(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
@@ -140,6 +144,10 @@ private:
 	}
 
 	void generateImage(unsigned w, unsigned h, unsigned x = 0, unsigned y = 0) {
+		leftToggled = false;
+
+		auto start = clock::now();
+
 		std::vector<std::thread> threads;
 		threads.reserve(maxThreads);
 
@@ -152,12 +160,40 @@ private:
 				t.join();
 
 		texture.update(reinterpret_cast<unsigned char*>(image.data()));
+
+		auto stop = clock::now();
+		std::cout << w * h / std::chrono::duration<double>(clock::now() - start).count() / 1e6 << " Mpx/s\n";
 	}
 
 	void zoom(numberT z, mousePosition mouse) {
-		auto a = screen2complex(mouse.x, mouse.y);
+		auto a = screen2complex(mouse);
 		Zoom /= z;
-		translation += screen2complex(mouse.x, mouse.y) - a;
+		translation += screen2complex(mouse) - a;
+
+		generateImage(width, height);
+		drawFunctionIterations(true);
+	}
+
+	void zoom(mousePosition firstVertex, mousePosition secondVertex, bool zoomOut = false) {
+		mousePosition upperLeftVertex = { std::min(firstVertex.x, secondVertex.x), std::min(firstVertex.y, secondVertex.y) };
+		
+		resolution rectangleSize = firstVertex - secondVertex;
+
+		auto yScale = static_cast<double>(std::abs(rectangleSize.y)) / height;
+		auto xScale = static_cast<double>(std::abs(rectangleSize.x)) / width;
+		auto scale = std::max(yScale, xScale);
+		
+		auto rectangleCenter = (firstVertex + secondVertex) / 2;
+		
+		if (zoomOut) {
+			Zoom /= scale;
+			translation += screen2complex(rectangleCenter) + translation;
+		}
+		else {
+			translation = -screen2complex(rectangleCenter);
+			Zoom *= scale;
+		}
+	
 		generateImage(width, height);
 		drawFunctionIterations(true);
 	}
@@ -166,6 +202,7 @@ private:
 		Zoom = 2.1;
 		translation = { 0.75, 0 };
 		generateImage(width, height);
+		drawFunctionIterations(true);
 	}
 
 	void translate(mousePosition t) {
@@ -191,7 +228,7 @@ private:
 
 		image.resize(width * height);
 		texture.create(width, height);
-		sprite.setTextureRect(sf::IntRect(0, 0, w, h));
+		sprite.setTextureRect({ 0, 0, width, height });
 
 		generateImage(width, height);
 	}
@@ -199,9 +236,10 @@ private:
 	bool fullscreen = false;
 	resolution lastPosition;
 	resolution lastSize;
+	resolution nativeResolution;
 
 	void toggleFullscreen() {
-		fullscreen = !fullscreen;
+		fullscreen ^= true;
 		if (fullscreen) {
 			lastPosition = window.getPosition();
 			lastSize = { width, height };
@@ -211,26 +249,95 @@ private:
 			setSize(lastSize.x, lastSize.y, lastPosition);
 	}
 
+	using clock = std::chrono::high_resolution_clock;
+	clock::time_point firstClick = clock::now();
+
+	mousePosition firstRectangleVertex;
+
+	bool leftToggled = false;
+	mousePosition lastClickPosition;
+
+	bool middlePressed = false;
+
+	bool rightToggled = false;
+	mousePosition lastMousePosition;
+
+	bool shiftPressed = false;
+
+	enum class panningDirection {
+		None,
+		Up,
+		Right,
+		Down,
+		Left
+	} verticalPan, horizontalPan;
+
 	void handleEvent(sf::Event event) {
 		switch (event.type) {
-		case sf::Event::Closed: window.close(); break;
-		case sf::Event::MouseWheelScrolled: zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition); break;
-		case sf::Event::Resized: setSize(event.size.width, event.size.height, window.getPosition()); break;
+		case sf::Event::Closed: 
+			window.close(); break;
+		case sf::Event::MouseWheelScrolled:
+			if (event.mouseWheelScroll.wheel == sf::Mouse::VerticalWheel)
+				zoom(1 + event.mouseWheelScroll.delta / 10.0, lastMousePosition); break;
+		case sf::Event::Resized: 
+			setSize(event.size.width, event.size.height, window.getPosition()); break;
 		case sf::Event::MouseButtonPressed:
-			if (event.mouseButton.button == sf::Mouse::Left) leftPressed = true;
-			if (event.mouseButton.button == sf::Mouse::Right) rightPressed = true;
+			if (event.mouseButton.button == sf::Mouse::Left) {
+				leftToggled ^= true;
+
+				if (leftToggled)
+					firstRectangleVertex = lastMousePosition;
+				else if (lastMousePosition == lastClickPosition && clock::now() - firstClick < std::chrono::duration<double>(0.5))
+					translate({ width / 2 - event.mouseButton.x, event.mouseButton.y - height / 2 });
+				else
+					zoom(firstRectangleVertex, lastMousePosition, shiftPressed);
+
+				firstClick = clock::now();
+				lastClickPosition = lastMousePosition;
+			}
+			else if (event.mouseButton.button == sf::Mouse::Middle) 
+				middlePressed = true;
 			break;
 		case sf::Event::MouseButtonReleased:
-			if (event.mouseButton.button == sf::Mouse::Left) leftPressed = false;
-			if (event.mouseButton.button == sf::Mouse::Right) rightPressed = false;
+			switch (event.mouseButton.button) {
+			case sf::Mouse::Left: if (lastMousePosition != lastClickPosition) zoom(firstRectangleVertex, lastMousePosition, shiftPressed); break;
+			case sf::Mouse::Middle: middlePressed = false; break;
+			case sf::Mouse::Right: rightToggled ^= true; break;
+			} 
 			break;
 		case sf::Event::MouseMoved:
-			if (leftPressed)
+			if (middlePressed)
 				translate({ event.mouseMove.x - lastMousePosition.x, lastMousePosition.y - event.mouseMove.y });
+
 			lastMousePosition = { event.mouseMove.x, event.mouseMove.y };
+			break;
+		case sf::Event::KeyPressed:
+			switch (event.key.code) {
+			case sf::Keyboard::LShift:
+			case sf::Keyboard::RShift: shiftPressed = true; break;
+			case sf::Keyboard::W:
+			case sf::Keyboard::Up: verticalPan = panningDirection::Up; break;
+			case sf::Keyboard::D:
+			case sf::Keyboard::Right: horizontalPan = panningDirection::Right; break;
+			case sf::Keyboard::S:
+			case sf::Keyboard::Down: verticalPan = panningDirection::Down; break;
+			case sf::Keyboard::A:
+			case sf::Keyboard::Left: horizontalPan = panningDirection::Left; break;
+			}
 			break;
 		case sf::Event::KeyReleased:
 			switch (event.key.code) {
+			case sf::Keyboard::W:
+			case sf::Keyboard::Up: if (verticalPan == panningDirection::Up) verticalPan = panningDirection::None; break;
+			case sf::Keyboard::D:
+			case sf::Keyboard::Right: if (horizontalPan == panningDirection::Right) horizontalPan = panningDirection::None; break;
+			case sf::Keyboard::S:
+			case sf::Keyboard::Down: if (verticalPan == panningDirection::Down) verticalPan = panningDirection::None; break;
+			case sf::Keyboard::A:
+			case sf::Keyboard::Left: if (horizontalPan == panningDirection::Left) horizontalPan = panningDirection::None; break;
+			case sf::Keyboard::LShift:
+			case sf::Keyboard::RShift: shiftPressed = false; break;
+			case sf::Keyboard::Escape: leftToggled = false; break;
 			case sf::Keyboard::R: reset(); break;
 			case sf::Keyboard::Enter: if (!event.key.alt) break;
 			case sf::Keyboard::F11: toggleFullscreen(); break;
@@ -244,31 +351,42 @@ private:
 	mousePosition lastGeneratedPosition = { -1, -1 };
 	std::vector<sf::Vertex> vertices;
 
-	void drawFunctionIterations(bool regenerate = false) {
-		const auto color = sf::Color::White;
-		
+	const sf::RenderStates exclusion = sf::RenderStates(sf::BlendMode(sf::BlendMode::OneMinusDstColor, sf::BlendMode::OneMinusSrcColor, sf::BlendMode::Add));
+
+	void drawFunctionIterations(bool regenerate = false) {	
 		if (lastGeneratedPosition != lastMousePosition || regenerate) {
 			vertices.clear();
-			vertices.push_back({ lastMousePosition, color });
+			vertices.push_back({ lastMousePosition });
 
 			auto c = screen2complex(lastMousePosition.x, lastMousePosition.y);
 			complex z = 0;
 			for (unsigned i = 0; i < maxIterations; ++i) {
 				z = z * z + c;
 				auto s = complex2screen(z);
-				vertices.push_back({ s, color });
+				vertices.push_back({ s });
 				if (std::abs(s.x) > 5 * width || std::abs(s.y) > 5 * height)
 					break;
 			}
-
+		
 			lastGeneratedPosition = lastMousePosition;
 		}
 		
 		window.draw(vertices.data(), vertices.size(), sf::LineStrip);
 	}
 
+	void drawScalingPreview() {
+		auto rectangle = sf::RectangleShape(lastMousePosition - firstRectangleVertex);
+		rectangle.setFillColor(sf::Color::Transparent);
+		rectangle.setOutlineThickness(2);
+		rectangle.setPosition(firstRectangleVertex);
+		window.draw(rectangle);
+	}
+
+	clock::time_point lastFrameStart = clock::now();
+	std::chrono::duration<double> frameTime;
+
 public:
-	Application(): defaultColorMap({
+	Application() : defaultColorMap({
 		{ {0, 7.0 / 255, 100.0 / 255}, 0 },
 		{ {32.0 / 255, 107.0 / 255, 203.0 / 255 }, 0.16 },
 		{ {237.0 / 255, 255.0 / 255, 255.0 / 255 }, 0.42 },
@@ -284,15 +402,37 @@ public:
 
 	void run() {
 		while (window.isOpen()) {
+			frameTime = clock::now() - lastFrameStart;
+			lastFrameStart = clock::now();
+
 			sf::Event event;
 			while (window.pollEvent(event))
 				handleEvent(event);
 
 			window.clear();
-			window.draw(sprite);
 
-			if (rightPressed)
+			mousePosition panVector;
+			switch (verticalPan) {
+			case panningDirection::Up: panVector.y = height; break;
+			case panningDirection::Down: panVector.y = -height; break;
+			}
+
+			switch (horizontalPan) {
+			case panningDirection::Right: panVector.x = width; break;
+			case panningDirection::Left: panVector.x = -width; break;
+			}
+
+			panVector *= frameTime.count() / 2;
+			if (verticalPan != panningDirection::None || horizontalPan != panningDirection::None)
+				translate(panVector);
+
+			if (rightToggled)
 				drawFunctionIterations();
+
+			if (leftToggled)
+				drawScalingPreview();
+
+			window.draw(sprite, exclusion);
 
 			window.display();
 		}
